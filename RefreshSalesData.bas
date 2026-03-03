@@ -333,9 +333,17 @@ End Function
 Public Sub Auto_Open()
     Application.OnKey "+^r", "RefreshSalesData"   ' Ctrl+Shift+R = Sales Data
     Application.OnKey "+^d", "RefreshStockData"    ' Ctrl+Shift+D = Stock Data
+    Application.OnKey "+^e", "ExportPO"            ' Ctrl+Shift+E = Export PO
+    Application.OnKey "+^n", "DetectNewItems"      ' Ctrl+Shift+N = New Items
+    Application.OnKey "+^g", "CheckNegativeStock"  ' Ctrl+Shift+G = Negative Stock
+    Application.OnKey "+^a", "RunFullCycle"         ' Ctrl+Shift+A = Full Cycle
 End Sub
 
 Public Sub Auto_Close()
     Application.OnKey "+^r"   ' Reset sales shortcut
     Application.OnKey "+^d"   ' Reset stock shortcut
+    Application.OnKey "+^e"   ' Reset export shortcut
+    Application.OnKey "+^n"   ' Reset new items shortcut
+    Application.OnKey "+^g"   ' Reset negative stock shortcut
+    Application.OnKey "+^a"   ' Reset full cycle shortcut
 End Sub
