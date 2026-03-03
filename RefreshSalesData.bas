@@ -232,12 +232,14 @@ Private Function JoinSheetNames(wb As Workbook) As String
 End Function
 
 '================================================================
-' AUTO: Assign keyboard shortcut on workbook open
+' AUTO: Assign keyboard shortcuts on workbook open
 '================================================================
 Public Sub Auto_Open()
-    Application.OnKey "+^r", "RefreshSalesData"  ' Ctrl+Shift+R
+    Application.OnKey "+^r", "RefreshSalesData"   ' Ctrl+Shift+R = Sales Data
+    Application.OnKey "+^d", "RefreshStockData"    ' Ctrl+Shift+D = Stock Data
 End Sub
 
 Public Sub Auto_Close()
-    Application.OnKey "+^r"  ' Reset shortcut
+    Application.OnKey "+^r"   ' Reset sales shortcut
+    Application.OnKey "+^d"   ' Reset stock shortcut
 End Sub
