@@ -2,9 +2,12 @@ Attribute VB_Name = "RefreshSalesData"
 '================================================================
 ' SALES DATA REFRESH MODULE
 ' ------------------------------------------------
-' Pulls raw sales data from DailySalesTransform.xlsx,
+' Reads the raw QuickBooks "Sales Report" export directly,
+' parses the hierarchical structure (Supplier > Item > Transactions),
 ' filters by the date range in Date_Selector,
-' and writes it into the Sales_Data sheet.
+' and writes flat data into the Sales_Data sheet.
+'
+' No Power Query or DailySalesTransform file needed!
 '
 ' The UNIQUE formulas in Saas_PO and PO_Qty_Calc
 ' handle deduplication and supplier filtering.
@@ -15,20 +18,16 @@ Attribute VB_Name = "RefreshSalesData"
 Option Explicit
 
 ' ============================================================
-' CONFIGURATION — Update these if your file/sheet names change
+' CONFIGURATION — Update these if your file/path changes
 ' ============================================================
-Private Const SOURCE_PATH As String = "C:\Users\Peter\OneDrive - petergerard.com.au\Documents\Purchase_Order_Automation\DailySalesTransform.xlsx"
-Private Const SOURCE_SHEET As String = "Transformed"
+Private Const SOURCE_PATH As String = "C:\Users\Peter\OneDrive - petergerard.com.au\Documents\Purchase_Order_Automation\Sales Report Last Month To COB Yesterday.xlsx"
+Private Const SOURCE_SHEET As String = "Sheet1"
 
-' Column positions in the SOURCE data (1-based)
-Private Const COL_SUPPLIER   As Long = 1   ' Column A
-Private Const COL_DATE       As Long = 2   ' Column B
-Private Const COL_ITEM       As Long = 3   ' Column C
-Private Const COL_DESC       As Long = 4   ' Column D
-Private Const COL_QTY        As Long = 5   ' Column E
+' Row where data starts in the QB export (after title, date range, blank, headers)
+Private Const QB_DATA_START_ROW As Long = 5
 
 '================================================================
-' PUBLIC: Refresh Sales_Data from external workbook
+' PUBLIC: Refresh Sales_Data from raw QuickBooks sales export
 '================================================================
 Public Sub RefreshSalesData()
 
@@ -45,7 +44,6 @@ Public Sub RefreshSalesData()
 
     Dim startDt As Date, endDt As Date
 
-    ' C2 = start date, D2 = end date
     If Not IsDate(wsDateSel.Range("C2").Value) Then
         MsgBox "Start Date (Date_Selector C2) is not a valid date." & vbCrLf & _
                "Value found: " & CStr(wsDateSel.Range("C2").Value), vbExclamation
@@ -67,34 +65,29 @@ Public Sub RefreshSalesData()
 
     ' Check if source file exists
     If Dir(SOURCE_PATH) = "" Then
-        MsgBox "Source file not found:" & vbCrLf & vbCrLf & SOURCE_PATH & vbCrLf & vbCrLf & _
+        MsgBox "QuickBooks sales export not found:" & vbCrLf & vbCrLf & SOURCE_PATH & vbCrLf & vbCrLf & _
                "Check the SOURCE_PATH constant in the VBA module." & vbCrLf & _
                "(Alt+F11 to open VBA Editor, then open RefreshSalesData module)", _
                vbExclamation, "File Not Found"
         Exit Sub
     End If
 
-    ' Open source workbook (read-only)
+    ' Disable screen updates and calculations for speed
     Application.ScreenUpdating = False
     Application.Calculation = xlCalculationManual
     Application.EnableEvents = False
-    Application.StatusBar = "Opening " & SOURCE_PATH & "..."
+    Application.StatusBar = "Opening QuickBooks sales export..."
 
+    ' Open source workbook
     Dim wbSource As Workbook
     On Error Resume Next
     Set wbSource = Workbooks.Open(Filename:=SOURCE_PATH, ReadOnly:=True, UpdateLinks:=0)
     On Error GoTo 0
 
     If wbSource Is Nothing Then
-        Application.ScreenUpdating = True
-        Application.Calculation = xlCalculationAutomatic
-        Application.EnableEvents = True
-        Application.StatusBar = False
-        MsgBox "Could not open the source workbook.", vbExclamation
-        Exit Sub
+        GoTo CleanupAndExit
     End If
 
-    ' Find the source sheet
     Dim wsSource As Worksheet
     On Error Resume Next
     Set wsSource = wbSource.Sheets(SOURCE_SHEET)
@@ -106,34 +99,140 @@ Public Sub RefreshSalesData()
         Application.Calculation = xlCalculationAutomatic
         Application.EnableEvents = True
         Application.StatusBar = False
-        MsgBox "Sheet '" & SOURCE_SHEET & "' not found in source workbook." & vbCrLf & _
-               "Available sheets: " & JoinSheetNames(wbSource), vbExclamation
+        MsgBox "Sheet '" & SOURCE_SHEET & "' not found.", vbExclamation
         Exit Sub
     End If
 
-    ' Read source data into array
+    ' Read all source data into array
     Dim lastRow As Long
-    lastRow = wsSource.Cells(wsSource.Rows.Count, COL_ITEM).End(xlUp).Row
+    lastRow = wsSource.Cells(wsSource.Rows.Count, 1).End(xlUp).Row
 
-    If lastRow < 2 Then
+    If lastRow < QB_DATA_START_ROW Then
         wbSource.Close SaveChanges:=False
-        Application.ScreenUpdating = True
-        Application.Calculation = xlCalculationAutomatic
-        Application.EnableEvents = True
-        Application.StatusBar = False
-        MsgBox "No data found in the source sheet.", vbInformation
-        Exit Sub
+        GoTo CleanupAndExit
     End If
 
-    Application.StatusBar = "Reading " & (lastRow - 1) & " rows..."
-
+    Application.StatusBar = "Reading " & lastRow & " rows..."
     Dim srcData As Variant
-    srcData = wsSource.Range(wsSource.Cells(2, 1), wsSource.Cells(lastRow, COL_QTY)).Value
+    srcData = wsSource.Range(wsSource.Cells(1, 1), wsSource.Cells(lastRow, 4)).Value
 
-    ' Close source workbook
     wbSource.Close SaveChanges:=False
 
-    ' Get Sales_Data sheet
+    ' === PARSE THE HIERARCHICAL QB STRUCTURE ===
+    ' Structure:
+    '   Supplier header row:  A = supplier name, B/C/D empty
+    '   Item code row:        A = item code, B/C/D empty
+    '   Transaction rows:     A empty, B = date, C = qty, D = description
+    '   Total rows:           A = "Total for ..." or "TOTAL"
+
+    Dim rowCount As Long
+    rowCount = UBound(srcData, 1)
+
+    ' Output array (max possible size)
+    Dim outData() As Variant
+    ReDim outData(1 To rowCount, 1 To 5)
+    Dim outCount As Long
+    outCount = 0
+
+    Dim currentSupplier As String
+    Dim currentItem As String
+    Dim aVal As String, bVal As Variant, cVal As Variant, dVal As Variant
+    Dim txDate As Date
+    Dim i As Long
+
+    currentSupplier = ""
+    currentItem = ""
+
+    Application.StatusBar = "Parsing QuickBooks data..."
+
+    For i = QB_DATA_START_ROW To rowCount
+        ' Read row values
+        If IsEmpty(srcData(i, 1)) Then
+            aVal = ""
+        Else
+            aVal = Trim(CStr(srcData(i, 1)))
+        End If
+        bVal = srcData(i, 2)
+        cVal = srcData(i, 3)
+        dVal = srcData(i, 4)
+
+        ' Skip TOTAL rows and footer
+        If UCase(aVal) = "TOTAL" Then GoTo NextQBRow
+        If Left(aVal, 9) = "Total for" Then GoTo NextQBRow
+        If Left(aVal, 1) = " " Then GoTo NextQBRow  ' Timestamp row
+        If Left(aVal, 7) = "Accrual" Then GoTo NextQBRow
+
+        ' Determine row type
+        Dim hasDate As Boolean
+        hasDate = False
+        If Not IsEmpty(bVal) Then
+            If IsDate(bVal) Then hasDate = True
+        End If
+
+        If Len(aVal) > 0 And Not hasDate And IsEmpty(cVal) And IsEmpty(dVal) Then
+            ' This is either a SUPPLIER HEADER or an ITEM CODE row
+            ' Supplier headers come before item codes
+            ' We distinguish by checking if the next non-empty A-value row
+            ' also has no B/C/D (then this is a supplier, next is an item)
+            ' OR we can check if the next row has a date (then this is an item code)
+
+            Dim nextHasDate As Boolean
+            Dim nextAVal As String
+            nextHasDate = False
+            nextAVal = ""
+
+            If i + 1 <= rowCount Then
+                If Not IsEmpty(srcData(i + 1, 2)) Then
+                    If IsDate(srcData(i + 1, 2)) Then nextHasDate = True
+                End If
+                If Not IsEmpty(srcData(i + 1, 1)) Then
+                    nextAVal = Trim(CStr(srcData(i + 1, 1)))
+                End If
+            End If
+
+            If nextHasDate Then
+                ' Next row has a date = this row is an ITEM CODE
+                currentItem = aVal
+            ElseIf Len(nextAVal) > 0 And Not nextHasDate Then
+                ' Next row has text in A but no date = this is a SUPPLIER HEADER
+                ' (next row will be an item code)
+                currentSupplier = aVal
+                currentItem = ""
+            Else
+                ' Default: treat as item code
+                currentItem = aVal
+            End If
+
+        ElseIf hasDate And Len(aVal) = 0 Then
+            ' TRANSACTION ROW: has date in B, no value in A
+            ' Only include if we have a valid supplier and item
+            If Len(currentSupplier) > 0 And Len(currentItem) > 0 Then
+                ' Check quantity exists
+                If Not IsEmpty(cVal) And cVal <> "" Then
+                    txDate = CDate(bVal)
+
+                    ' Date filter
+                    If txDate >= startDt And txDate <= endDt Then
+                        outCount = outCount + 1
+
+                        outData(outCount, 1) = currentSupplier         ' Supplier
+                        outData(outCount, 2) = bVal                     ' Date
+                        outData(outCount, 3) = currentItem              ' Item
+                        If IsEmpty(dVal) Then
+                            outData(outCount, 4) = ""
+                        Else
+                            outData(outCount, 4) = Trim(CStr(dVal))     ' Description
+                        End If
+                        outData(outCount, 5) = CDbl(cVal)               ' Qty
+                    End If
+                End If
+            End If
+        End If
+
+NextQBRow:
+    Next i
+
+    ' === WRITE TO SALES_DATA ===
     Dim wsSalesData As Worksheet
     On Error Resume Next
     Set wsSalesData = ThisWorkbook.Sheets("Sales_Data")
@@ -144,98 +243,53 @@ Public Sub RefreshSalesData()
         Application.Calculation = xlCalculationAutomatic
         Application.EnableEvents = True
         Application.StatusBar = False
-        MsgBox "Sales_Data sheet not found in this workbook.", vbExclamation
+        MsgBox "Sales_Data sheet not found.", vbExclamation
         Exit Sub
     End If
 
-    ' Clear old data (keep header row 1)
+    ' Clear old data
     Dim lastClear As Long
-    lastClear = wsSalesData.Cells(wsSalesData.Rows.Count, COL_ITEM).End(xlUp).Row
+    lastClear = wsSalesData.Cells(wsSalesData.Rows.Count, 3).End(xlUp).Row
     If lastClear >= 2 Then
-        wsSalesData.Range(wsSalesData.Cells(2, 1), wsSalesData.Cells(lastClear, COL_QTY)).Clear
+        wsSalesData.Range(wsSalesData.Cells(2, 1), wsSalesData.Cells(lastClear, 5)).Clear
     End If
 
-    ' === PASS 1: Filter by date range into output array ===
-    Dim rowCount As Long, filteredCount As Long
-    Dim i As Long
-    Dim rowDate As Date
-
-    rowCount = UBound(srcData, 1)
-    filteredCount = 0
-
-    ' Size output array to max possible
-    Dim outData() As Variant
-    ReDim outData(1 To rowCount, 1 To 5)
-
-    Application.StatusBar = "Filtering " & rowCount & " rows..."
-
-    For i = 1 To rowCount
-        ' Skip rows with empty Item or Date
-        If Not IsEmpty(srcData(i, COL_ITEM)) And Not IsEmpty(srcData(i, COL_DATE)) Then
-            If IsDate(srcData(i, COL_DATE)) Then
-                rowDate = CDate(srcData(i, COL_DATE))
-
-                ' Date filter only — let formulas handle supplier filtering
-                If rowDate >= startDt And rowDate <= endDt Then
-                    filteredCount = filteredCount + 1
-
-                    outData(filteredCount, 1) = srcData(i, COL_SUPPLIER)
-                    outData(filteredCount, 2) = srcData(i, COL_DATE)
-                    outData(filteredCount, 3) = srcData(i, COL_ITEM)
-                    outData(filteredCount, 4) = srcData(i, COL_DESC)
-                    outData(filteredCount, 5) = srcData(i, COL_QTY)
-                End If
-            End If
-        End If
-    Next i
-
-    ' Handle zero results
-    If filteredCount = 0 Then
-        Dim sampleDate As String
-        If rowCount > 0 And IsDate(srcData(1, COL_DATE)) Then
-            sampleDate = Format(CDate(srcData(1, COL_DATE)), "DD/MM/YYYY")
-        ElseIf rowCount > 0 Then
-            sampleDate = CStr(srcData(1, COL_DATE)) & " (not a date)"
-        End If
-
+    If outCount = 0 Then
         Application.ScreenUpdating = True
         Application.Calculation = xlCalculationAutomatic
         Application.EnableEvents = True
         Application.StatusBar = False
         MsgBox "No rows matched the date range." & vbCrLf & vbCrLf & _
                "Filter: " & Format(startDt, "DD/MM/YYYY") & " to " & Format(endDt, "DD/MM/YYYY") & vbCrLf & _
-               "Source rows: " & rowCount & vbCrLf & _
-               "First row date: " & sampleDate, _
+               "Source rows scanned: " & rowCount, _
                vbExclamation, "No Results"
         Exit Sub
     End If
 
-    ' === PASS 2: Bulk write to sheet in one shot ===
-    Application.StatusBar = "Writing " & filteredCount & " rows..."
+    ' Trim output array and bulk write
+    Application.StatusBar = "Writing " & outCount & " rows..."
 
-    ' Trim array to actual size
     Dim finalData() As Variant
-    ReDim finalData(1 To filteredCount, 1 To 5)
+    ReDim finalData(1 To outCount, 1 To 5)
     Dim j As Long
-    For i = 1 To filteredCount
+    For i = 1 To outCount
         For j = 1 To 5
             finalData(i, j) = outData(i, j)
         Next j
     Next i
 
-    ' Bulk write — single operation
-    wsSalesData.Range(wsSalesData.Cells(2, 1), wsSalesData.Cells(filteredCount + 1, 5)).Value = finalData
+    wsSalesData.Range(wsSalesData.Cells(2, 1), wsSalesData.Cells(outCount + 1, 5)).Value = finalData
 
     ' Format date column
-    wsSalesData.Range(wsSalesData.Cells(2, COL_DATE), wsSalesData.Cells(filteredCount + 1, COL_DATE)).NumberFormat = "D/MM/YYYY"
+    wsSalesData.Range(wsSalesData.Cells(2, 2), wsSalesData.Cells(outCount + 1, 2)).NumberFormat = "D/MM/YYYY"
 
-    ' Resize the Sales_Data table if it exists
+    ' Resize table if exists
     Dim lo As ListObject
     On Error Resume Next
     Set lo = wsSalesData.ListObjects("Sales_Data")
     On Error GoTo 0
     If Not lo Is Nothing Then
-        lo.Resize wsSalesData.Range("A1:E" & (filteredCount + 1))
+        lo.Resize wsSalesData.Range("A1:E" & (outCount + 1))
     End If
 
     Application.ScreenUpdating = True
@@ -246,8 +300,18 @@ Public Sub RefreshSalesData()
     MsgBox "Sales Data refreshed!" & vbCrLf & vbCrLf & _
            "Date range: " & Format(startDt, "DD/MM/YYYY") & " to " & Format(endDt, "DD/MM/YYYY") & vbCrLf & _
            "Source rows scanned: " & rowCount & vbCrLf & _
-           "Rows imported: " & filteredCount, _
+           "Rows imported: " & outCount & vbCrLf & _
+           "Suppliers found: " & currentSupplier & " (last)", _
            vbInformation, "Refresh Complete"
+
+    Exit Sub
+
+CleanupAndExit:
+    Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
+    Application.StatusBar = False
+    MsgBox "Could not open/read the source file.", vbExclamation
 
 End Sub
 
