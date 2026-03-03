@@ -603,19 +603,19 @@ Public Sub RunFullCycle()
 
     ' Step 1: Refresh Stock
     Application.StatusBar = "Step 1/4: Refreshing stock data..."
-    RefreshStockData
+    RefreshStockData.RefreshStockData
 
     ' Step 2: Check Negative Stock
     Application.StatusBar = "Step 2/4: Checking negative stock..."
-    CheckNegativeStock
+    POWorkflow.CheckNegativeStock
 
     ' Step 3: Refresh Sales
     Application.StatusBar = "Step 3/4: Refreshing sales data..."
-    RefreshSalesData
+    RefreshSalesData.RefreshSalesData
 
     ' Step 4: Detect New Items
     Application.StatusBar = "Step 4/4: Detecting new items..."
-    DetectNewItems
+    POWorkflow.DetectNewItems
 
     Application.StatusBar = False
 
