@@ -430,21 +430,40 @@ Public Sub MoveToMaster()
 End Sub
 
 '================================================================
-' 4. CHECK NEGATIVE STOCK — Flag items with negative qty
-'    for physical floor check
+' 4. CHECK NEGATIVE STOCK — Flag negative qty items for the
+'    CURRENT SUPPLIER's order items only (not whole stock list).
+'    Includes Location from Master_Stock_List for floor walk.
+'    Formats item codes as text to prevent scientific notation.
 '    Shortcut: Ctrl+Shift+G
 '================================================================
 Public Sub CheckNegativeStock()
 
     ' Get sheets
-    Dim wsStock As Worksheet, wsNeg As Worksheet
+    Dim wsStock As Worksheet, wsNeg As Worksheet, wsSales As Worksheet, wsMaster As Worksheet
+    Dim wsDateSel As Worksheet
     On Error Resume Next
     Set wsStock = ThisWorkbook.Sheets("Daily_Stock_Data")
+    Set wsSales = ThisWorkbook.Sheets("Sales_Data")
+    Set wsMaster = ThisWorkbook.Sheets("Master_Stock_List")
+    Set wsDateSel = ThisWorkbook.Sheets("Date_Selector")
     On Error GoTo 0
 
     If wsStock Is Nothing Then
         MsgBox "Daily_Stock_Data sheet not found.", vbExclamation
         Exit Sub
+    End If
+    If wsSales Is Nothing Then
+        MsgBox "Sales_Data sheet not found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Get current supplier
+    Dim currentSupplier As String
+    currentSupplier = ""
+    If Not wsDateSel Is Nothing Then
+        If Not IsEmpty(wsDateSel.Range("A2").Value) Then
+            currentSupplier = Trim(CStr(wsDateSel.Range("A2").Value))
+        End If
     End If
 
     ' Get or use existing Negative_Stock_Check sheet
@@ -453,24 +472,23 @@ Public Sub CheckNegativeStock()
     On Error GoTo 0
 
     If wsNeg Is Nothing Then
-        ' Create the sheet
         Set wsNeg = ThisWorkbook.Sheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
         wsNeg.Name = "Negative_Stock_Check"
-
-        ' Add headers
-        wsNeg.Range("A1").Value = "Item"
-        wsNeg.Range("B1").Value = "Description"
-        wsNeg.Range("C1").Value = "Qty_On_Hand"
-        wsNeg.Range("D1").Value = "Check Date"
-        wsNeg.Range("E1").Value = "Floor Count"
-        wsNeg.Range("F1").Value = "Notes"
-
-        With wsNeg.Range("A1:F1")
-            .Font.Bold = True
-            .Interior.Color = RGB(192, 0, 0)    ' Dark red
-            .Font.Color = RGB(255, 255, 255)     ' White
-        End With
     End If
+
+    ' Set headers (always refresh them)
+    wsNeg.Range("A1").Value = "Item"
+    wsNeg.Range("B1").Value = "Description"
+    wsNeg.Range("C1").Value = "Qty_On_Hand"
+    wsNeg.Range("D1").Value = "Location"
+    wsNeg.Range("E1").Value = "Floor Count"
+    wsNeg.Range("F1").Value = "Notes"
+
+    With wsNeg.Range("A1:F1")
+        .Font.Bold = True
+        .Interior.Color = RGB(192, 0, 0)
+        .Font.Color = RGB(255, 255, 255)
+    End With
 
     Application.ScreenUpdating = False
     Application.StatusBar = "Checking for negative stock..."
@@ -480,6 +498,73 @@ Public Sub CheckNegativeStock()
     negLastRow = wsNeg.Cells(wsNeg.Rows.Count, 1).End(xlUp).Row
     If negLastRow >= 2 Then
         wsNeg.Range("A2:F" & negLastRow).Clear
+    End If
+
+    ' Build dictionary of item codes relevant to this supplier's order
+    ' (items that appear in Sales_Data for the current supplier)
+    Dim dictOrderItems As Object
+    Set dictOrderItems = CreateObject("Scripting.Dictionary")
+    dictOrderItems.CompareMode = vbTextCompare
+
+    Dim salesLastRow As Long
+    salesLastRow = wsSales.Cells(wsSales.Rows.Count, 3).End(xlUp).Row
+
+    If salesLastRow >= 2 Then
+        Dim salesData As Variant
+        salesData = wsSales.Range("A2:C" & salesLastRow).Value
+
+        Dim s As Long
+        For s = 1 To UBound(salesData, 1)
+            If Not IsEmpty(salesData(s, 3)) Then
+                Dim sItemCode As String
+                sItemCode = Trim(CStr(salesData(s, 3)))
+
+                ' Filter by supplier if one is selected
+                If Len(currentSupplier) > 0 Then
+                    If Not IsEmpty(salesData(s, 1)) Then
+                        If UCase(Trim(CStr(salesData(s, 1)))) = UCase(currentSupplier) Then
+                            If Not dictOrderItems.Exists(sItemCode) Then
+                                dictOrderItems.Add sItemCode, True
+                            End If
+                        End If
+                    End If
+                Else
+                    ' No supplier filter — include all
+                    If Not dictOrderItems.Exists(sItemCode) Then
+                        dictOrderItems.Add sItemCode, True
+                    End If
+                End If
+            End If
+        Next s
+    End If
+
+    ' Build dictionary of locations from Master_Stock_List
+    Dim dictLocation As Object
+    Set dictLocation = CreateObject("Scripting.Dictionary")
+    dictLocation.CompareMode = vbTextCompare
+
+    If Not wsMaster Is Nothing Then
+        Dim masterLastRow As Long
+        masterLastRow = wsMaster.Cells(wsMaster.Rows.Count, 2).End(xlUp).Row
+
+        If masterLastRow >= 2 Then
+            Dim masterData As Variant
+            masterData = wsMaster.Range("B2:F" & masterLastRow).Value
+
+            Dim m As Long
+            For m = 1 To UBound(masterData, 1)
+                If Not IsEmpty(masterData(m, 1)) Then
+                    Dim mCode As String
+                    mCode = Trim(CStr(masterData(m, 1)))
+                    If Len(mCode) > 0 And Not dictLocation.Exists(mCode) Then
+                        Dim locVal As String
+                        locVal = ""
+                        If Not IsEmpty(masterData(m, 5)) Then locVal = Trim(CStr(masterData(m, 5)))
+                        dictLocation.Add mCode, locVal
+                    End If
+                End If
+            Next m
+        End If
     End If
 
     ' Read stock data
@@ -494,43 +579,57 @@ Public Sub CheckNegativeStock()
     End If
 
     Dim stockData As Variant
-    stockData = wsStock.Range("A2:D" & stockLastRow).Value
+    stockData = wsStock.Range("A2:C" & stockLastRow).Value
 
-    ' Find negative quantities
+    ' Find negative quantities for order items only
     Dim negCount As Long
     negCount = 0
     Dim i As Long
 
-    ' Size output array
-    Dim outData() As Variant
-    ReDim outData(1 To UBound(stockData, 1), 1 To 4)
+    ' Collect results (Item, Description, Qty, Location)
+    Dim outItems() As String
+    Dim outDescs() As String
+    Dim outQtys() As Double
+    Dim outLocs() As String
+    ReDim outItems(1 To UBound(stockData, 1))
+    ReDim outDescs(1 To UBound(stockData, 1))
+    ReDim outQtys(1 To UBound(stockData, 1))
+    ReDim outLocs(1 To UBound(stockData, 1))
 
     For i = 1 To UBound(stockData, 1)
         If Not IsEmpty(stockData(i, 3)) And IsNumeric(stockData(i, 3)) Then
             If CDbl(stockData(i, 3)) < 0 Then
-                negCount = negCount + 1
-                outData(negCount, 1) = stockData(i, 1)  ' Item
-                outData(negCount, 2) = stockData(i, 2)  ' Description
-                outData(negCount, 3) = stockData(i, 3)  ' Qty
-                outData(negCount, 4) = Date               ' Check date
+                ' Check if this item is in the current order's item list
+                Dim stockItem As String
+                stockItem = ""
+                If Not IsEmpty(stockData(i, 1)) Then stockItem = Trim(CStr(stockData(i, 1)))
+
+                If Len(stockItem) > 0 And dictOrderItems.Exists(stockItem) Then
+                    negCount = negCount + 1
+                    outItems(negCount) = stockItem
+                    If Not IsEmpty(stockData(i, 2)) Then
+                        outDescs(negCount) = Trim(CStr(stockData(i, 2)))
+                    End If
+                    outQtys(negCount) = CDbl(stockData(i, 3))
+                    If dictLocation.Exists(stockItem) Then
+                        outLocs(negCount) = dictLocation(stockItem)
+                    End If
+                End If
             End If
         End If
     Next i
 
     ' Write results
     If negCount > 0 Then
-        ' Trim and write
-        Dim finalData() As Variant
-        ReDim finalData(1 To negCount, 1 To 4)
-        Dim j As Long
-        For i = 1 To negCount
-            For j = 1 To 4
-                finalData(i, j) = outData(i, j)
-            Next j
-        Next i
-
-        wsNeg.Range("A2:D" & (negCount + 1)).Value = finalData
-        wsNeg.Range("D2:D" & (negCount + 1)).NumberFormat = "DD/MM/YYYY"
+        Dim r As Long
+        For r = 1 To negCount
+            ' Format item codes as text to prevent scientific notation
+            wsNeg.Cells(r + 1, 1).NumberFormat = "@"
+            wsNeg.Cells(r + 1, 1).Value = outItems(r)
+            wsNeg.Cells(r + 1, 2).Value = outDescs(r)
+            wsNeg.Cells(r + 1, 3).Value = outQtys(r)
+            wsNeg.Cells(r + 1, 4).Value = outLocs(r)
+        Next r
 
         ' Highlight the qty column red
         With wsNeg.Range("C2:C" & (negCount + 1))
@@ -547,26 +646,36 @@ Public Sub CheckNegativeStock()
     Application.ScreenUpdating = True
     Application.StatusBar = False
 
+    Dim supplierMsg As String
+    If Len(currentSupplier) > 0 Then
+        supplierMsg = " for supplier: " & currentSupplier
+    Else
+        supplierMsg = " (all suppliers)"
+    End If
+
     If negCount = 0 Then
-        MsgBox "No negative stock found. All quantities are 0 or above.", _
+        MsgBox "No negative stock found" & supplierMsg & "." & vbCrLf & _
+               "All order items have 0 or positive quantity.", _
                vbInformation, "Negative Stock Check"
     Else
-        MsgBox negCount & " item(s) with NEGATIVE stock found!" & vbCrLf & vbCrLf & _
+        MsgBox negCount & " item(s) with NEGATIVE stock" & supplierMsg & "!" & vbCrLf & vbCrLf & _
                "These need a physical floor check." & vbCrLf & _
+               "Location is shown in column D." & vbCrLf & _
                "Use column E to record your floor count." & vbCrLf & _
                "Then update QuickBooks and re-run stock refresh.", _
                vbExclamation, "Negative Stock Check"
         wsNeg.Activate
 
-        ' Also offer to export as PDF for floor walk
+        ' Offer to export as PDF for floor walk
         Dim resp As VbMsgBoxResult
         resp = MsgBox("Export negative stock list as PDF for the floor walk?", _
                        vbYesNo + vbQuestion, "Export Checklist?")
         If resp = vbYes Then
+            Dim pdfName As String
+            pdfName = "Negative_Stock_" & CleanFileName(currentSupplier) & "_" & Format(Date, "YYYY-MM-DD") & ".pdf"
             Dim pdfPath As String
-            pdfPath = EXPORT_FOLDER & "Negative_Stock_Check_" & Format(Date, "YYYY-MM-DD") & ".pdf"
+            pdfPath = EXPORT_FOLDER & pdfName
 
-            ' Check export folder exists
             If Dir(EXPORT_FOLDER, vbDirectory) = "" Then
                 MkDir EXPORT_FOLDER
             End If
