@@ -76,6 +76,8 @@ Public Sub RefreshSalesData()
 
     ' Open source workbook (read-only)
     Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False
     Application.StatusBar = "Opening " & SOURCE_PATH & "..."
 
     Dim wbSource As Workbook
@@ -85,6 +87,8 @@ Public Sub RefreshSalesData()
 
     If wbSource Is Nothing Then
         Application.ScreenUpdating = True
+        Application.Calculation = xlCalculationAutomatic
+        Application.EnableEvents = True
         Application.StatusBar = False
         MsgBox "Could not open the source workbook.", vbExclamation
         Exit Sub
@@ -99,6 +103,8 @@ Public Sub RefreshSalesData()
     If wsSource Is Nothing Then
         wbSource.Close SaveChanges:=False
         Application.ScreenUpdating = True
+        Application.Calculation = xlCalculationAutomatic
+        Application.EnableEvents = True
         Application.StatusBar = False
         MsgBox "Sheet '" & SOURCE_SHEET & "' not found in source workbook." & vbCrLf & _
                "Available sheets: " & JoinSheetNames(wbSource), vbExclamation
@@ -112,6 +118,8 @@ Public Sub RefreshSalesData()
     If lastRow < 2 Then
         wbSource.Close SaveChanges:=False
         Application.ScreenUpdating = True
+        Application.Calculation = xlCalculationAutomatic
+        Application.EnableEvents = True
         Application.StatusBar = False
         MsgBox "No data found in the source sheet.", vbInformation
         Exit Sub
@@ -133,6 +141,8 @@ Public Sub RefreshSalesData()
 
     If wsSalesData Is Nothing Then
         Application.ScreenUpdating = True
+        Application.Calculation = xlCalculationAutomatic
+        Application.EnableEvents = True
         Application.StatusBar = False
         MsgBox "Sales_Data sheet not found in this workbook.", vbExclamation
         Exit Sub
@@ -145,14 +155,17 @@ Public Sub RefreshSalesData()
         wsSalesData.Range(wsSalesData.Cells(2, 1), wsSalesData.Cells(lastClear, COL_QTY)).Clear
     End If
 
-    ' Filter by date range and write to Sales_Data
+    ' === PASS 1: Filter by date range into output array ===
     Dim rowCount As Long, filteredCount As Long
-    Dim outRow As Long, i As Long
+    Dim i As Long
     Dim rowDate As Date
 
     rowCount = UBound(srcData, 1)
-    outRow = 2  ' Start writing at row 2 (below headers)
     filteredCount = 0
+
+    ' Size output array to max possible
+    Dim outData() As Variant
+    ReDim outData(1 To rowCount, 1 To 5)
 
     Application.StatusBar = "Filtering " & rowCount & " rows..."
 
@@ -166,14 +179,11 @@ Public Sub RefreshSalesData()
                 If rowDate >= startDt And rowDate <= endDt Then
                     filteredCount = filteredCount + 1
 
-                    wsSalesData.Cells(outRow, COL_SUPPLIER).Value = srcData(i, COL_SUPPLIER)
-                    wsSalesData.Cells(outRow, COL_DATE).Value = srcData(i, COL_DATE)
-                    wsSalesData.Cells(outRow, COL_DATE).NumberFormat = "D/MM/YYYY"
-                    wsSalesData.Cells(outRow, COL_ITEM).Value = srcData(i, COL_ITEM)
-                    wsSalesData.Cells(outRow, COL_DESC).Value = srcData(i, COL_DESC)
-                    wsSalesData.Cells(outRow, COL_QTY).Value = srcData(i, COL_QTY)
-
-                    outRow = outRow + 1
+                    outData(filteredCount, 1) = srcData(i, COL_SUPPLIER)
+                    outData(filteredCount, 2) = srcData(i, COL_DATE)
+                    outData(filteredCount, 3) = srcData(i, COL_ITEM)
+                    outData(filteredCount, 4) = srcData(i, COL_DESC)
+                    outData(filteredCount, 5) = srcData(i, COL_QTY)
                 End If
             End If
         End If
@@ -189,6 +199,8 @@ Public Sub RefreshSalesData()
         End If
 
         Application.ScreenUpdating = True
+        Application.Calculation = xlCalculationAutomatic
+        Application.EnableEvents = True
         Application.StatusBar = False
         MsgBox "No rows matched the date range." & vbCrLf & vbCrLf & _
                "Filter: " & Format(startDt, "DD/MM/YYYY") & " to " & Format(endDt, "DD/MM/YYYY") & vbCrLf & _
@@ -198,17 +210,37 @@ Public Sub RefreshSalesData()
         Exit Sub
     End If
 
-    ' Refresh the Sales_Data table if it exists
+    ' === PASS 2: Bulk write to sheet in one shot ===
+    Application.StatusBar = "Writing " & filteredCount & " rows..."
+
+    ' Trim array to actual size
+    Dim finalData() As Variant
+    ReDim finalData(1 To filteredCount, 1 To 5)
+    Dim j As Long
+    For i = 1 To filteredCount
+        For j = 1 To 5
+            finalData(i, j) = outData(i, j)
+        Next j
+    Next i
+
+    ' Bulk write — single operation
+    wsSalesData.Range(wsSalesData.Cells(2, 1), wsSalesData.Cells(filteredCount + 1, 5)).Value = finalData
+
+    ' Format date column
+    wsSalesData.Range(wsSalesData.Cells(2, COL_DATE), wsSalesData.Cells(filteredCount + 1, COL_DATE)).NumberFormat = "D/MM/YYYY"
+
+    ' Resize the Sales_Data table if it exists
     Dim lo As ListObject
     On Error Resume Next
     Set lo = wsSalesData.ListObjects("Sales_Data")
     On Error GoTo 0
     If Not lo Is Nothing Then
-        ' Resize table to fit new data
-        lo.Resize wsSalesData.Range("A1:E" & (outRow - 1))
+        lo.Resize wsSalesData.Range("A1:E" & (filteredCount + 1))
     End If
 
     Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
     Application.StatusBar = False
 
     MsgBox "Sales Data refreshed!" & vbCrLf & vbCrLf & _
