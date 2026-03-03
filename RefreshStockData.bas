@@ -49,6 +49,8 @@ Public Sub RefreshStockData()
 
     ' Open source workbook (read-only)
     Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False
     Application.StatusBar = "Opening QuickBooks stock export..."
 
     Dim wbSource As Workbook
@@ -58,6 +60,8 @@ Public Sub RefreshStockData()
 
     If wbSource Is Nothing Then
         Application.ScreenUpdating = True
+        Application.Calculation = xlCalculationAutomatic
+        Application.EnableEvents = True
         Application.StatusBar = False
         MsgBox "Could not open the QuickBooks stock export.", vbExclamation
         Exit Sub
@@ -72,18 +76,22 @@ Public Sub RefreshStockData()
     If wsSource Is Nothing Then
         wbSource.Close SaveChanges:=False
         Application.ScreenUpdating = True
+        Application.Calculation = xlCalculationAutomatic
+        Application.EnableEvents = True
         Application.StatusBar = False
         MsgBox "Sheet '" & STOCK_SOURCE_SHEET & "' not found in the export file.", vbExclamation
         Exit Sub
     End If
 
-    ' Find last data row (look for "TOTAL" in column A to stop before it)
+    ' Find last data row
     Dim lastRow As Long
     lastRow = wsSource.Cells(wsSource.Rows.Count, QB_COL_ITEM).End(xlUp).Row
 
     If lastRow < QB_DATA_START_ROW Then
         wbSource.Close SaveChanges:=False
         Application.ScreenUpdating = True
+        Application.Calculation = xlCalculationAutomatic
+        Application.EnableEvents = True
         Application.StatusBar = False
         MsgBox "No data found in the export file.", vbInformation
         Exit Sub
@@ -105,6 +113,8 @@ Public Sub RefreshStockData()
 
     If wsStock Is Nothing Then
         Application.ScreenUpdating = True
+        Application.Calculation = xlCalculationAutomatic
+        Application.EnableEvents = True
         Application.StatusBar = False
         MsgBox "Daily_Stock_Data sheet not found in this workbook.", vbExclamation
         Exit Sub
@@ -117,14 +127,16 @@ Public Sub RefreshStockData()
         wsStock.Range(wsStock.Cells(2, 1), wsStock.Cells(lastClear, 4)).Clear
     End If
 
-    ' Process and write data
+    ' === PASS 1: Process source data into output array ===
     Dim rowCount As Long, importCount As Long
-    Dim outRow As Long, i As Long
-    Dim itemVal As String, descVal As String, qtyVal As Double, taxVal As String
-    Dim colonPos As Long
+    Dim i As Long
+    Dim itemVal As String, colonPos As Long
 
     rowCount = UBound(srcData, 1)
-    outRow = 2  ' Start writing at row 2 (below headers)
+
+    ' Size output array to max possible (will trim later)
+    Dim outData() As Variant
+    ReDim outData(1 To rowCount, 1 To 4)
     importCount = 0
 
     Application.StatusBar = "Processing " & rowCount & " rows..."
@@ -137,9 +149,9 @@ Public Sub RefreshStockData()
         ' Skip empty rows, TOTAL row, and timestamp rows
         If Len(itemVal) = 0 Then GoTo NextRow
         If UCase(itemVal) = "TOTAL" Then GoTo NextRow
-        If Left(itemVal, 1) = " " Then GoTo NextRow  ' Timestamp row has leading space
+        If Left(itemVal, 1) = " " Then GoTo NextRow
 
-        ' Extract code after colon if present (e.g., "12 Volt Products:CAI-150" -> "CAI-150")
+        ' Extract code after colon if present
         colonPos = InStrRev(itemVal, ":")
         If colonPos > 0 Then
             itemVal = Trim(Mid(itemVal, colonPos + 1))
@@ -148,41 +160,57 @@ Public Sub RefreshStockData()
         ' Skip if item is empty after extraction
         If Len(itemVal) = 0 Then GoTo NextRow
 
-        ' Get description
-        If IsEmpty(srcData(i, QB_COL_DESC)) Then
-            descVal = ""
-        Else
-            descVal = Trim(CStr(srcData(i, QB_COL_DESC)))
-        End If
-
-        ' Get quantity — treat blank/empty as 0
-        If IsEmpty(srcData(i, QB_COL_QTY)) Or srcData(i, QB_COL_QTY) = "" Then
-            qtyVal = 0
-        ElseIf IsNumeric(srcData(i, QB_COL_QTY)) Then
-            qtyVal = CDbl(srcData(i, QB_COL_QTY))
-        Else
-            qtyVal = 0
-        End If
-
-        ' Get tax code
-        If IsEmpty(srcData(i, QB_COL_TAX)) Then
-            taxVal = ""
-        Else
-            taxVal = Trim(CStr(srcData(i, QB_COL_TAX)))
-        End If
-
-        ' Write to Daily_Stock_Data
-        wsStock.Cells(outRow, 1).Value = itemVal
-        wsStock.Cells(outRow, 2).Value = descVal
-        wsStock.Cells(outRow, 3).Value = qtyVal
-        wsStock.Cells(outRow, 3).NumberFormat = "#,##0"
-        wsStock.Cells(outRow, 4).Value = taxVal
-
-        outRow = outRow + 1
         importCount = importCount + 1
+
+        ' Column 1: Item
+        outData(importCount, 1) = itemVal
+
+        ' Column 2: Description
+        If IsEmpty(srcData(i, QB_COL_DESC)) Then
+            outData(importCount, 2) = ""
+        Else
+            outData(importCount, 2) = Trim(CStr(srcData(i, QB_COL_DESC)))
+        End If
+
+        ' Column 3: Qty — treat blank as 0
+        If IsEmpty(srcData(i, QB_COL_QTY)) Or srcData(i, QB_COL_QTY) = "" Then
+            outData(importCount, 3) = 0
+        ElseIf IsNumeric(srcData(i, QB_COL_QTY)) Then
+            outData(importCount, 3) = CDbl(srcData(i, QB_COL_QTY))
+        Else
+            outData(importCount, 3) = 0
+        End If
+
+        ' Column 4: Tax code
+        If IsEmpty(srcData(i, QB_COL_TAX)) Then
+            outData(importCount, 4) = ""
+        Else
+            outData(importCount, 4) = Trim(CStr(srcData(i, QB_COL_TAX)))
+        End If
 
 NextRow:
     Next i
+
+    ' === PASS 2: Write output array to sheet in one shot ===
+    If importCount > 0 Then
+        Application.StatusBar = "Writing " & importCount & " items..."
+
+        ' Trim array to actual size
+        Dim finalData() As Variant
+        ReDim finalData(1 To importCount, 1 To 4)
+        Dim j As Long
+        For i = 1 To importCount
+            For j = 1 To 4
+                finalData(i, j) = outData(i, j)
+            Next j
+        Next i
+
+        ' Bulk write — single operation, MUCH faster than cell-by-cell
+        wsStock.Range(wsStock.Cells(2, 1), wsStock.Cells(importCount + 1, 4)).Value = finalData
+
+        ' Format quantity column
+        wsStock.Range(wsStock.Cells(2, 3), wsStock.Cells(importCount + 1, 3)).NumberFormat = "#,##0"
+    End If
 
     ' Resize the table if it exists
     Dim lo As ListObject
@@ -191,11 +219,13 @@ NextRow:
     On Error GoTo 0
     If Not lo Is Nothing Then
         If importCount > 0 Then
-            lo.Resize wsStock.Range("A1:D" & (outRow - 1))
+            lo.Resize wsStock.Range("A1:D" & (importCount + 1))
         End If
     End If
 
     Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
     Application.StatusBar = False
 
     MsgBox "Stock Data refreshed!" & vbCrLf & vbCrLf & _
