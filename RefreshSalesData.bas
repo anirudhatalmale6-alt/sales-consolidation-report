@@ -331,12 +331,15 @@ End Function
 ' AUTO: Assign keyboard shortcuts on workbook open
 '================================================================
 Public Sub Auto_Open()
-    Application.OnKey "+^r", "RefreshSalesData"   ' Ctrl+Shift+R = Sales Data
-    Application.OnKey "+^d", "RefreshStockData"    ' Ctrl+Shift+D = Stock Data
-    Application.OnKey "+^e", "ExportPO"            ' Ctrl+Shift+E = Export PO
-    Application.OnKey "+^n", "DetectNewItems"      ' Ctrl+Shift+N = New Items
-    Application.OnKey "+^g", "CheckNegativeStock"  ' Ctrl+Shift+G = Negative Stock
-    Application.OnKey "+^a", "RunFullCycle"         ' Ctrl+Shift+A = Full Cycle
+    Dim wb As String
+    wb = "'" & ThisWorkbook.Name & "'!"
+
+    Application.OnKey "+^r", wb & "RefreshSalesData.RefreshSalesData"    ' Ctrl+Shift+R
+    Application.OnKey "+^d", wb & "RefreshStockData.RefreshStockData"    ' Ctrl+Shift+D
+    Application.OnKey "+^e", wb & "POWorkflow.ExportPO"                  ' Ctrl+Shift+E
+    Application.OnKey "+^n", wb & "POWorkflow.DetectNewItems"            ' Ctrl+Shift+N
+    Application.OnKey "+^g", wb & "POWorkflow.CheckNegativeStock"        ' Ctrl+Shift+G
+    Application.OnKey "+^a", wb & "POWorkflow.RunFullCycle"              ' Ctrl+Shift+A
 End Sub
 
 Public Sub Auto_Close()
