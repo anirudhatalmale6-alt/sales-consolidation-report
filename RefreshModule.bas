@@ -241,6 +241,34 @@ Private Sub ProcessData(srcData As Variant, startDt As Date, endDt As Date)
         End If
     Next i
 
+    ' Check if any rows matched
+    If dictQty.Count = 0 Then
+        ' Show diagnostic info to help troubleshoot
+        Dim sampleDate As String
+        If rowCount > 0 Then
+            If IsDate(srcData(1, COL_DATE)) Then
+                sampleDate = Format(CDate(srcData(1, COL_DATE)), "DD/MM/YYYY")
+            Else
+                sampleDate = CStr(srcData(1, COL_DATE)) & " (not a date)"
+            End If
+        End If
+
+        wsSummary.Range("B4").Value = "Last refreshed: " & Format(Now, "DD/MM/YYYY HH:MM:SS") & " — No results"
+        wsSummary.Range("B4").Font.Italic = True
+        wsSummary.Range("B4").Font.Color = RGB(200, 0, 0)
+
+        MsgBox "No rows matched the date range." & vbCrLf & vbCrLf & _
+               "Date filter: " & Format(startDt, "DD/MM/YYYY") & " to " & Format(endDt, "DD/MM/YYYY") & vbCrLf & _
+               "Source rows scanned: " & rowCount & vbCrLf & _
+               "First row date value: " & sampleDate & vbCrLf & vbCrLf & _
+               "Check that your date range overlaps with the source data.", _
+               vbExclamation, "No Results"
+
+        wsSummary.Activate
+        Application.StatusBar = False
+        Exit Sub
+    End If
+
     ' Write results to Summary sheet
     Dim keys As Variant
     keys = dictQty.keys
