@@ -278,6 +278,9 @@ NextQBRow:
         Next j
     Next i
 
+    ' Format item code column as text BEFORE writing (preserves leading zeros on barcodes)
+    wsSalesData.Range(wsSalesData.Cells(2, 3), wsSalesData.Cells(outCount + 1, 3)).NumberFormat = "@"
+
     wsSalesData.Range(wsSalesData.Cells(2, 1), wsSalesData.Cells(outCount + 1, 5)).Value = finalData
 
     ' Format date column
@@ -329,24 +332,31 @@ End Function
 
 '================================================================
 ' AUTO: Assign keyboard shortcuts on workbook open
+' Uses wrapper subs (KS_*) to avoid module/sub name conflicts
+' and SharePoint URL resolution issues.
 '================================================================
 Public Sub Auto_Open()
-    Dim wb As String
-    wb = "'" & ThisWorkbook.Name & "'!"
-
-    Application.OnKey "+^r", wb & "RefreshSalesData.RefreshSalesData"    ' Ctrl+Shift+R
-    Application.OnKey "+^d", wb & "RefreshStockData.RefreshStockData"    ' Ctrl+Shift+D
-    Application.OnKey "+^e", wb & "POWorkflow.ExportPO"                  ' Ctrl+Shift+E
-    Application.OnKey "+^n", wb & "POWorkflow.DetectNewItems"            ' Ctrl+Shift+N
-    Application.OnKey "+^g", wb & "POWorkflow.CheckNegativeStock"        ' Ctrl+Shift+G
-    Application.OnKey "+^a", wb & "POWorkflow.RunFullCycle"              ' Ctrl+Shift+A
+    Application.OnKey "+^r", "KS_RefreshSales"       ' Ctrl+Shift+R
+    Application.OnKey "+^d", "KS_RefreshStock"        ' Ctrl+Shift+D
+    Application.OnKey "+^e", "KS_ExportPO"            ' Ctrl+Shift+E
+    Application.OnKey "+^n", "KS_DetectNewItems"      ' Ctrl+Shift+N
+    Application.OnKey "+^g", "KS_CheckNegStock"       ' Ctrl+Shift+G
+    Application.OnKey "+^a", "KS_RunFullCycle"         ' Ctrl+Shift+A
 End Sub
 
 Public Sub Auto_Close()
-    Application.OnKey "+^r"   ' Reset sales shortcut
-    Application.OnKey "+^d"   ' Reset stock shortcut
-    Application.OnKey "+^e"   ' Reset export shortcut
-    Application.OnKey "+^n"   ' Reset new items shortcut
-    Application.OnKey "+^g"   ' Reset negative stock shortcut
-    Application.OnKey "+^a"   ' Reset full cycle shortcut
+    Application.OnKey "+^r"
+    Application.OnKey "+^d"
+    Application.OnKey "+^e"
+    Application.OnKey "+^n"
+    Application.OnKey "+^g"
+    Application.OnKey "+^a"
 End Sub
+
+' Keyboard shortcut wrappers (unique names that don't clash with modules)
+Public Sub KS_RefreshSales():    RefreshSalesData.RefreshSalesData:    End Sub
+Public Sub KS_RefreshStock():    RefreshStockData.RefreshStockData:    End Sub
+Public Sub KS_ExportPO():        POWorkflow.ExportPO:                  End Sub
+Public Sub KS_DetectNewItems():  POWorkflow.DetectNewItems:            End Sub
+Public Sub KS_CheckNegStock():   POWorkflow.CheckNegativeStock:        End Sub
+Public Sub KS_RunFullCycle():    POWorkflow.RunFullCycle:               End Sub

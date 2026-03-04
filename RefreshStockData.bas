@@ -205,6 +205,9 @@ NextRow:
             Next j
         Next i
 
+        ' Format item code column as text BEFORE writing (preserves leading zeros)
+        wsStock.Range(wsStock.Cells(2, 1), wsStock.Cells(importCount + 1, 1)).NumberFormat = "@"
+
         ' Bulk write — single operation, MUCH faster than cell-by-cell
         wsStock.Range(wsStock.Cells(2, 1), wsStock.Cells(importCount + 1, 4)).Value = finalData
 

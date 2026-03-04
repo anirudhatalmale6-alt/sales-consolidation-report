@@ -1,0 +1,35 @@
+===========================================================
+UPDATED FORMULAS — v2
+===========================================================
+These replace the existing formulas in your workbook.
+Paste from this file to avoid emoji/autocorrect issues.
+===========================================================
+
+--- Saas_PO!H2 (UPDATED) ---
+This now filters OUT items where New Order Qty = 0.
+It pulls from PO_Qty_Calc instead of Sales_Data directly.
+
+=LET(items, PO_Qty_Calc!A2#, descs, PO_Qty_Calc!B2#, qtys, PO_Qty_Calc!F2#, mask, qtys>0, IFERROR(FILTER(HSTACK(items, descs), mask), "No items to order"))
+
+--- Saas_PO!J2 (UPDATED) ---
+Now also pulls directly from filtered PO_Qty_Calc:
+
+=IFERROR(FILTER(PO_Qty_Calc!F2#, PO_Qty_Calc!F2#>0), "")
+
+--- PO_Qty_Calc!A2 (NO CHANGE) ---
+Keep as-is. This is the source that Saas_PO now references.
+
+=LET(r,FILTER(Sales_Data[],(Date_Selector!C2<=Sales_Data[Date])*(Date_Selector!D2>=Sales_Data[Date])*((Date_Selector!A2="")+(Date_Selector!A2=Sales_Data[Supplier]))),IFERROR(UNIQUE(DROP(DROP(r,,2),,-1)),"No rows in this date range"))
+
+===========================================================
+HOW TO UPDATE:
+1. Go to Saas_PO sheet
+2. Click cell H2
+3. Delete the existing formula
+4. Copy the H2 formula from above and paste
+5. Press Enter (it will spill down automatically)
+6. Click cell J2
+7. Delete the existing formula
+8. Copy the J2 formula from above and paste
+9. Press Enter
+===========================================================
