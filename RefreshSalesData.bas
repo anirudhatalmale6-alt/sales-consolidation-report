@@ -331,32 +331,14 @@ Private Function JoinSheetNames(wb As Workbook) As String
 End Function
 
 '================================================================
-' AUTO: Assign keyboard shortcuts on workbook open
-' Uses wrapper subs (KS_*) to avoid module/sub name conflicts
-' and SharePoint URL resolution issues.
+' AUTO_OPEN / AUTO_CLOSE — No longer needed for shortcuts.
+' Buttons on the Control_Panel sheet handle everything now.
+' Kept as empty stubs in case Excel looks for them.
 '================================================================
 Public Sub Auto_Open()
-    Application.OnKey "+^r", "KS_RefreshSales"       ' Ctrl+Shift+R
-    Application.OnKey "+^d", "KS_RefreshStock"        ' Ctrl+Shift+D
-    Application.OnKey "+^e", "KS_ExportPO"            ' Ctrl+Shift+E
-    Application.OnKey "+^n", "KS_DetectNewItems"      ' Ctrl+Shift+N
-    Application.OnKey "+^g", "KS_CheckNegStock"       ' Ctrl+Shift+G
-    Application.OnKey "+^a", "KS_RunFullCycle"         ' Ctrl+Shift+A
+    ' Control Panel buttons handle all functions — no shortcuts needed
 End Sub
 
 Public Sub Auto_Close()
-    Application.OnKey "+^r"
-    Application.OnKey "+^d"
-    Application.OnKey "+^e"
-    Application.OnKey "+^n"
-    Application.OnKey "+^g"
-    Application.OnKey "+^a"
+    ' Nothing to clean up
 End Sub
-
-' Keyboard shortcut wrappers (unique names that don't clash with modules)
-Public Sub KS_RefreshSales():    RefreshSalesData.RefreshSalesData:    End Sub
-Public Sub KS_RefreshStock():    RefreshStockData.RefreshStockData:    End Sub
-Public Sub KS_ExportPO():        POWorkflow.ExportPO:                  End Sub
-Public Sub KS_DetectNewItems():  POWorkflow.DetectNewItems:            End Sub
-Public Sub KS_CheckNegStock():   POWorkflow.CheckNegativeStock:        End Sub
-Public Sub KS_RunFullCycle():    POWorkflow.RunFullCycle:               End Sub
