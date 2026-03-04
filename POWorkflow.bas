@@ -22,9 +22,13 @@ Option Explicit
 ' CONFIGURATION
 ' ============================================================
 Private Const EXPORT_FOLDER As String = "C:\Users\Peter\OneDrive - petergerard.com.au\Documents\Daily Saasant Uploads\"
+Private Const ADHOC_PATH As String = "C:\Users\Peter\OneDrive - petergerard.com.au\Documents\Purchase_Order_Automation\Adhoc_PO_Items.xlsx"
+Private Const ADHOC_SHEET As String = "Adhoc_Items"
 
 '================================================================
 ' 1. EXPORT PO — Save Saas_PO as .xlsx and .pdf
+'    Merges ad-hoc items from Adhoc_PO_Items.xlsx if found.
+'    Archives ad-hoc items as PDF, clears them from source.
 '    Filename: SupplierName_PO_YYYY-MM-DD
 '    Shortcut: Ctrl+Shift+E
 '================================================================
@@ -61,7 +65,7 @@ Public Sub ExportPO()
 
     ' Check Saas_PO has data
     Dim lastRow As Long
-    lastRow = wsPO.Cells(wsPO.Rows.Count, 1).End(xlUp).Row
+    lastRow = wsPO.Cells(wsPO.Rows.Count, 8).End(xlUp).Row  ' Column H (Product/Service)
     If lastRow < 2 Then
         MsgBox "Saas_PO has no data to export.", vbExclamation
         Exit Sub
@@ -71,22 +75,81 @@ Public Sub ExportPO()
     Dim dateStr As String
     dateStr = Format(Date, "YYYY-MM-DD")
 
-    ' Clean supplier name for filename (remove invalid chars)
     Dim cleanSupplier As String
     cleanSupplier = CleanFileName(supplierName)
 
     Dim baseName As String
     baseName = cleanSupplier & "_PO_" & dateStr
 
+    ' Get PO number from Saas_PO A2 (used for ad-hoc archive naming)
+    Dim poNumber As String
+    poNumber = ""
+    If Not IsEmpty(wsPO.Range("A2").Value) Then
+        poNumber = Trim(CStr(wsPO.Range("A2").Value))
+    End If
+
     ' Check export folder exists, create if not
     If Dir(EXPORT_FOLDER, vbDirectory) = "" Then
         MkDir EXPORT_FOLDER
     End If
 
-    Dim xlsxPath As String
-    Dim pdfPath As String
-    xlsxPath = EXPORT_FOLDER & baseName & ".xlsx"
-    pdfPath = EXPORT_FOLDER & baseName & ".pdf"
+    ' === CHECK FOR AD-HOC ITEMS ===
+    Dim adhocCount As Long
+    adhocCount = 0
+    Dim adhocRows() As Long       ' Row numbers in the ad-hoc workbook to process
+    Dim wbAdhoc As Workbook
+    Dim wsAdhoc As Worksheet
+    Dim adhocAvailable As Boolean
+    adhocAvailable = False
+
+    If Dir(ADHOC_PATH) <> "" Then
+        Application.ScreenUpdating = False
+        On Error Resume Next
+        Set wbAdhoc = Workbooks.Open(Filename:=ADHOC_PATH, ReadOnly:=False, UpdateLinks:=0)
+        On Error GoTo 0
+
+        If Not wbAdhoc Is Nothing Then
+            On Error Resume Next
+            Set wsAdhoc = wbAdhoc.Sheets(ADHOC_SHEET)
+            On Error GoTo 0
+
+            If Not wsAdhoc Is Nothing Then
+                ' Count rows matching this vendor
+                Dim adhocLastRow As Long
+                adhocLastRow = wsAdhoc.Cells(wsAdhoc.Rows.Count, 2).End(xlUp).Row
+
+                If adhocLastRow >= 2 Then
+                    ReDim adhocRows(1 To adhocLastRow)
+                    Dim a As Long
+                    For a = 2 To adhocLastRow
+                        If Not IsEmpty(wsAdhoc.Cells(a, 2).Value) Then
+                            If UCase(Trim(CStr(wsAdhoc.Cells(a, 2).Value))) = UCase(supplierName) Then
+                                adhocCount = adhocCount + 1
+                                adhocRows(adhocCount) = a
+                            End If
+                        End If
+                    Next a
+                End If
+
+                If adhocCount > 0 Then adhocAvailable = True
+            End If
+        End If
+        Application.ScreenUpdating = True
+    End If
+
+    ' Prompt about ad-hoc items
+    Dim includeAdhoc As Boolean
+    includeAdhoc = False
+
+    If adhocAvailable Then
+        Dim adhocResp As VbMsgBoxResult
+        adhocResp = MsgBox(adhocCount & " ad-hoc item(s) found for " & supplierName & "." & vbCrLf & vbCrLf & _
+                           "Include them in this PO export?", _
+                           vbYesNo + vbQuestion, "Ad-Hoc Items Found")
+        If adhocResp = vbYes Then
+            includeAdhoc = True
+        End If
+    End If
 
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
@@ -106,20 +169,139 @@ Public Sub ExportPO()
     usedRange.PasteSpecial Paste:=xlPasteValues
     Application.CutCopyMode = False
 
+    ' === MERGE AD-HOC ITEMS ===
+    If includeAdhoc And adhocCount > 0 Then
+        Dim exportWriteRow As Long
+        exportWriteRow = wsExport.Cells(wsExport.Rows.Count, 8).End(xlUp).Row + 1
+
+        Dim ai As Long
+        For ai = 1 To adhocCount
+            Dim srcRow As Long
+            srcRow = adhocRows(ai)
+
+            ' Copy all 13 columns from ad-hoc to export
+            Dim col As Long
+            For col = 1 To 13
+                If Not IsEmpty(wsAdhoc.Cells(srcRow, col).Value) Then
+                    ' Format barcode columns as text
+                    If col = 8 Then wsExport.Cells(exportWriteRow, col).NumberFormat = "@"
+                    wsExport.Cells(exportWriteRow, col).Value = wsAdhoc.Cells(srcRow, col).Value
+                Else
+                    ' Auto-fill standard fields if blank
+                    Select Case col
+                        Case 1  ' PO No
+                            If Len(poNumber) > 0 Then wsExport.Cells(exportWriteRow, col).Value = poNumber
+                        Case 2  ' Vendor
+                            wsExport.Cells(exportWriteRow, col).Value = supplierName
+                        Case 3  ' Date
+                            wsExport.Cells(exportWriteRow, col).Value = Date
+                        Case 7  ' Tax Calculation
+                            wsExport.Cells(exportWriteRow, col).Value = "TaxIncluded"
+                    End Select
+                End If
+            Next col
+
+            exportWriteRow = exportWriteRow + 1
+        Next ai
+    End If
+
     ' Auto-fit columns for readability
-    usedRange.Columns.AutoFit
+    wsExport.UsedRange.Columns.AutoFit
 
     ' Save as xlsx
+    Dim xlsxPath As String
+    xlsxPath = EXPORT_FOLDER & baseName & ".xlsx"
     wbExport.SaveAs Filename:=xlsxPath, FileFormat:=xlOpenXMLWorkbook
     wbExport.Close SaveChanges:=False
 
-    ' === Export as PDF ===
-    wsPO.ExportAsFixedFormat Type:=xlTypePDF, _
-        Filename:=pdfPath, _
-        Quality:=xlQualityStandard, _
-        IncludeDocProperties:=False, _
-        IgnorePrintAreas:=False, _
-        OpenAfterPublish:=False
+    ' === Export as PDF (from the export xlsx, re-open it) ===
+    ' Actually export PDF from the Saas_PO sheet + ad-hoc
+    ' Re-open the saved xlsx for PDF export
+    Dim pdfPath As String
+    pdfPath = EXPORT_FOLDER & baseName & ".pdf"
+
+    If includeAdhoc And adhocCount > 0 Then
+        ' Re-open the merged xlsx to export as PDF
+        Dim wbPdf As Workbook
+        Set wbPdf = Workbooks.Open(Filename:=xlsxPath, ReadOnly:=True)
+        wbPdf.Sheets(1).ExportAsFixedFormat Type:=xlTypePDF, _
+            Filename:=pdfPath, _
+            Quality:=xlQualityStandard, _
+            OpenAfterPublish:=False
+        wbPdf.Close SaveChanges:=False
+    Else
+        ' No ad-hoc items — export directly from Saas_PO
+        wsPO.ExportAsFixedFormat Type:=xlTypePDF, _
+            Filename:=pdfPath, _
+            Quality:=xlQualityStandard, _
+            IncludeDocProperties:=False, _
+            IgnorePrintAreas:=False, _
+            OpenAfterPublish:=False
+    End If
+
+    ' === ARCHIVE AD-HOC ITEMS + CLEAR ===
+    Dim adhocMsg As String
+    adhocMsg = ""
+
+    If includeAdhoc And adhocCount > 0 Then
+        ' Archive as PDF
+        Dim archiveName As String
+        If Len(poNumber) > 0 Then
+            archiveName = "Adhoc_Items_" & CleanFileName(poNumber) & ".pdf"
+        Else
+            archiveName = "Adhoc_Items_" & cleanSupplier & "_" & dateStr & ".pdf"
+        End If
+        Dim archivePath As String
+        archivePath = EXPORT_FOLDER & archiveName
+
+        ' Create a temp sheet with just the ad-hoc items for PDF
+        Dim wbArchive As Workbook
+        Set wbArchive = Workbooks.Add
+        Dim wsArchive As Worksheet
+        Set wsArchive = wbArchive.Sheets(1)
+
+        ' Copy headers
+        Dim h As Long
+        For h = 1 To 13
+            wsArchive.Cells(1, h).Value = wsAdhoc.Cells(1, h).Value
+            wsArchive.Cells(1, h).Font.Bold = True
+        Next h
+
+        ' Copy ad-hoc rows
+        Dim archRow As Long
+        archRow = 2
+        For ai = 1 To adhocCount
+            srcRow = adhocRows(ai)
+            For col = 1 To 13
+                wsArchive.Cells(archRow, col).NumberFormat = "@"
+                If Not IsEmpty(wsAdhoc.Cells(srcRow, col).Value) Then
+                    wsArchive.Cells(archRow, col).Value = wsAdhoc.Cells(srcRow, col).Value
+                End If
+            Next col
+            archRow = archRow + 1
+        Next ai
+
+        wsArchive.UsedRange.Columns.AutoFit
+        wsArchive.ExportAsFixedFormat Type:=xlTypePDF, _
+            Filename:=archivePath, _
+            Quality:=xlQualityStandard, _
+            OpenAfterPublish:=False
+        wbArchive.Close SaveChanges:=False
+
+        ' Clear the matched rows from the ad-hoc workbook (bottom to top)
+        For ai = adhocCount To 1 Step -1
+            wsAdhoc.Rows(adhocRows(ai)).Delete
+        Next ai
+
+        wbAdhoc.Save
+        adhocMsg = vbCrLf & "Ad-Hoc: " & adhocCount & " items merged + archived" & vbCrLf & _
+                   "Archive: " & archivePath
+    End If
+
+    ' Close ad-hoc workbook if open
+    If Not wbAdhoc Is Nothing Then
+        wbAdhoc.Close SaveChanges:=True
+    End If
 
     Application.DisplayAlerts = True
     Application.ScreenUpdating = True
@@ -127,7 +309,8 @@ Public Sub ExportPO()
     MsgBox "PO exported successfully!" & vbCrLf & vbCrLf & _
            "Supplier: " & supplierName & vbCrLf & _
            "XLSX: " & xlsxPath & vbCrLf & _
-           "PDF: " & pdfPath, _
+           "PDF: " & pdfPath & _
+           adhocMsg, _
            vbInformation, "Export Complete"
 
 End Sub
@@ -693,21 +876,95 @@ End Sub
 
 '================================================================
 ' 5. RUN FULL CYCLE — One button to do everything
+'    Checks for ad-hoc items first, then:
 '    Refresh Sales + Stock → Check Negative → Detect New Items
 '    Shortcut: Ctrl+Shift+A
 '================================================================
 Public Sub RunFullCycle()
 
-    Dim resp As VbMsgBoxResult
-    resp = MsgBox("This will run the full PO cycle:" & vbCrLf & vbCrLf & _
-                  "1. Refresh Stock Data" & vbCrLf & _
-                  "2. Check Negative Stock" & vbCrLf & _
-                  "3. Refresh Sales Data" & vbCrLf & _
-                  "4. Detect New Items" & vbCrLf & vbCrLf & _
-                  "After reviewing, run Export PO (Ctrl+Shift+E)." & vbCrLf & vbCrLf & _
-                  "Continue?", _
-                  vbYesNo + vbQuestion, "Run Full PO Cycle")
+    ' === AD-HOC ITEMS CHECK ===
+    ' Check if Adhoc_PO_Items.xlsx exists and has items for current vendor
+    Dim hasAdhoc As Boolean
+    hasAdhoc = False
 
+    If Dir(ADHOC_PATH) <> "" Then
+        Dim wsDateSel As Worksheet
+        On Error Resume Next
+        Set wsDateSel = ThisWorkbook.Sheets("Date_Selector")
+        On Error GoTo 0
+
+        Dim currentVendor As String
+        currentVendor = ""
+        If Not wsDateSel Is Nothing Then
+            If Not IsEmpty(wsDateSel.Range("A2").Value) Then
+                currentVendor = Trim(CStr(wsDateSel.Range("A2").Value))
+            End If
+        End If
+
+        If Len(currentVendor) > 0 Then
+            ' Quick check for matching vendor rows
+            Application.ScreenUpdating = False
+            Dim wbCheck As Workbook
+            On Error Resume Next
+            Set wbCheck = Workbooks.Open(Filename:=ADHOC_PATH, ReadOnly:=True, UpdateLinks:=0)
+            On Error GoTo 0
+
+            If Not wbCheck Is Nothing Then
+                Dim wsCheck As Worksheet
+                On Error Resume Next
+                Set wsCheck = wbCheck.Sheets(ADHOC_SHEET)
+                On Error GoTo 0
+
+                If Not wsCheck Is Nothing Then
+                    Dim chkLast As Long
+                    chkLast = wsCheck.Cells(wsCheck.Rows.Count, 2).End(xlUp).Row
+                    Dim chk As Long
+                    For chk = 2 To chkLast
+                        If Not IsEmpty(wsCheck.Cells(chk, 2).Value) Then
+                            If UCase(Trim(CStr(wsCheck.Cells(chk, 2).Value))) = UCase(currentVendor) Then
+                                hasAdhoc = True
+                                Exit For
+                            End If
+                        End If
+                    Next chk
+                End If
+                wbCheck.Close SaveChanges:=False
+            End If
+            Application.ScreenUpdating = True
+        End If
+    End If
+
+    ' Prompt about ad-hoc items and QB upload
+    If hasAdhoc Then
+        Dim qbResp As VbMsgBoxResult
+        qbResp = MsgBox("Ad-Hoc items found for " & currentVendor & " in Adhoc_PO_Items.xlsx." & vbCrLf & vbCrLf & _
+                         "Have the new Ad-Hoc items been uploaded to QuickBooks?" & vbCrLf & vbCrLf & _
+                         "Yes = Continue (items uploaded)" & vbCrLf & _
+                         "No = Stop (go upload items first)", _
+                         vbYesNo + vbExclamation, "Ad-Hoc Items — QuickBooks Check")
+        If qbResp = vbNo Then
+            MsgBox "Please upload Ad-Hoc items to QuickBooks first, then re-run.", _
+                   vbInformation, "Cycle Cancelled"
+            Exit Sub
+        End If
+    End If
+
+    ' === CONFIRM FULL CYCLE ===
+    Dim resp As VbMsgBoxResult
+    Dim cycleMsg As String
+    cycleMsg = "This will run the full PO cycle:" & vbCrLf & vbCrLf & _
+               "1. Refresh Stock Data" & vbCrLf & _
+               "2. Check Negative Stock" & vbCrLf & _
+               "3. Refresh Sales Data" & vbCrLf & _
+               "4. Detect New Items" & vbCrLf & vbCrLf
+
+    If hasAdhoc Then
+        cycleMsg = cycleMsg & "Ad-hoc items will be merged at export time." & vbCrLf & vbCrLf
+    End If
+
+    cycleMsg = cycleMsg & "After reviewing, run Export PO (Ctrl+Shift+E)." & vbCrLf & vbCrLf & "Continue?"
+
+    resp = MsgBox(cycleMsg, vbYesNo + vbQuestion, "Run Full PO Cycle")
     If resp = vbNo Then Exit Sub
 
     ' Step 1: Refresh Stock
@@ -728,9 +985,15 @@ Public Sub RunFullCycle()
 
     Application.StatusBar = False
 
-    MsgBox "Full cycle complete!" & vbCrLf & vbCrLf & _
-           "Review the Saas_PO sheet, then press Ctrl+Shift+E to export.", _
-           vbInformation, "Cycle Complete"
+    Dim completeMsg As String
+    completeMsg = "Full cycle complete!" & vbCrLf & vbCrLf & _
+                  "Review the Saas_PO sheet, then press Ctrl+Shift+E to export."
+    If hasAdhoc Then
+        completeMsg = completeMsg & vbCrLf & vbCrLf & _
+                      "Note: Ad-hoc items will be merged when you export."
+    End If
+
+    MsgBox completeMsg, vbInformation, "Cycle Complete"
 
 End Sub
 
