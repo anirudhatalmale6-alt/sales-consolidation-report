@@ -8,12 +8,9 @@ Attribute VB_Name = "POWorkflow"
 '   3. MoveToMaster   — Moves reviewed New_Items into Master
 '   4. CheckNegativeStock — Reports negative stock for floor check
 '   5. RunFullCycle   — One-click: Refresh + Check + Export
+'   6. SyncSupplier   — Sets supplier from Control Panel dropdown
 '
-' Shortcuts (assigned in Auto_Open):
-'   Ctrl+Shift+E  = ExportPO
-'   Ctrl+Shift+N  = DetectNewItems
-'   Ctrl+Shift+G  = CheckNegativeStock
-'   Ctrl+Shift+A  = RunFullCycle
+' All functions are accessed via buttons on the Control_Panel sheet.
 '================================================================
 
 Option Explicit
@@ -30,7 +27,6 @@ Private Const ADHOC_SHEET As String = "Adhoc_Items"
 '    Merges ad-hoc items from Adhoc_PO_Items.xlsx if found.
 '    Archives ad-hoc items as PDF, clears them from source.
 '    Filename: SupplierName_PO_YYYY-MM-DD
-'    Shortcut: Ctrl+Shift+E
 '================================================================
 Public Sub ExportPO()
 
@@ -318,7 +314,6 @@ End Sub
 '================================================================
 ' 2. DETECT NEW ITEMS — Find items in Sales_Data or Saas_PO
 '    that don't exist in Master_Stock_List
-'    Shortcut: Ctrl+Shift+N
 '================================================================
 Public Sub DetectNewItems()
 
@@ -617,7 +612,6 @@ End Sub
 '    CURRENT SUPPLIER's order items only (not whole stock list).
 '    Includes Location from Master_Stock_List for floor walk.
 '    Formats item codes as text to prevent scientific notation.
-'    Shortcut: Ctrl+Shift+G
 '================================================================
 Public Sub CheckNegativeStock()
 
@@ -878,7 +872,6 @@ End Sub
 ' 5. RUN FULL CYCLE — One button to do everything
 '    Checks for ad-hoc items first, then:
 '    Refresh Sales + Stock → Check Negative → Detect New Items
-'    Shortcut: Ctrl+Shift+A
 '================================================================
 Public Sub RunFullCycle()
 
@@ -962,7 +955,7 @@ Public Sub RunFullCycle()
         cycleMsg = cycleMsg & "Ad-hoc items will be merged at export time." & vbCrLf & vbCrLf
     End If
 
-    cycleMsg = cycleMsg & "After reviewing, run Export PO (Ctrl+Shift+E)." & vbCrLf & vbCrLf & "Continue?"
+    cycleMsg = cycleMsg & "After reviewing, click the Export PO button on the Control Panel." & vbCrLf & vbCrLf & "Continue?"
 
     resp = MsgBox(cycleMsg, vbYesNo + vbQuestion, "Run Full PO Cycle")
     If resp = vbNo Then Exit Sub
@@ -987,13 +980,77 @@ Public Sub RunFullCycle()
 
     Dim completeMsg As String
     completeMsg = "Full cycle complete!" & vbCrLf & vbCrLf & _
-                  "Review the Saas_PO sheet, then press Ctrl+Shift+E to export."
+                  "Review the Saas_PO sheet, then click the Export PO button on the Control Panel."
     If hasAdhoc Then
         completeMsg = completeMsg & vbCrLf & vbCrLf & _
                       "Note: Ad-hoc items will be merged when you export."
     End If
 
     MsgBox completeMsg, vbInformation, "Cycle Complete"
+
+End Sub
+
+'================================================================
+' 6. SYNC SUPPLIER — Reads supplier from Control_Panel dropdown
+'    and writes it to Date_Selector!A2
+'    Called by the "Set Supplier" button on Control Panel
+'================================================================
+Public Sub SyncSupplier()
+    Dim wsCP As Worksheet, wsDS As Worksheet
+    On Error Resume Next
+    Set wsCP = ThisWorkbook.Sheets("Control_Panel")
+    Set wsDS = ThisWorkbook.Sheets("Date_Selector")
+    On Error GoTo 0
+
+    If wsCP Is Nothing Or wsDS Is Nothing Then
+        MsgBox "Control_Panel or Date_Selector sheet not found.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Read supplier from the Control Panel dropdown (row 11, col C)
+    ' Find the dropdown cell — it's the one with data validation in column C
+    Dim newSupplier As String
+    newSupplier = ""
+
+    ' Search for the supplier value in column C (look for non-formula, non-empty cells)
+    Dim r As Long
+    For r = 1 To 50
+        If Not IsEmpty(wsCP.Cells(r, 3).Value) Then
+            ' Check if this cell has data validation (it's our dropdown)
+            Dim hasValidation As Boolean
+            hasValidation = False
+            On Error Resume Next
+            Dim vType As Long
+            vType = wsCP.Cells(r, 3).Validation.Type
+            If Err.Number = 0 Then hasValidation = True
+            Err.Clear
+            On Error GoTo 0
+
+            If hasValidation Then
+                newSupplier = Trim(CStr(wsCP.Cells(r, 3).Value))
+                Exit For
+            End If
+        End If
+    Next r
+
+    If Len(newSupplier) = 0 Then
+        MsgBox "No supplier selected on the Control Panel.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Write to Date_Selector
+    Application.EnableEvents = False
+    wsDS.Range("A2").Value = newSupplier
+    Application.EnableEvents = True
+
+    ' Force recalculation so dates update
+    Application.Calculate
+
+    MsgBox "Supplier set to: " & newSupplier & vbCrLf & vbCrLf & _
+           "Cycle: " & wsDS.Range("B2").Value & vbCrLf & _
+           "Dates: " & Format(wsDS.Range("C2").Value, "DD/MM/YYYY") & _
+           " to " & Format(wsDS.Range("D2").Value, "DD/MM/YYYY"), _
+           vbInformation, "Supplier Updated"
 
 End Sub
 
